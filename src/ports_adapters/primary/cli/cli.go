@@ -1,5 +1,7 @@
 package cli
 
-type Command struct {
-	TargetProject string
+import "gtracer/src/application"
+
+type Cli struct {
+	app application.App
 }

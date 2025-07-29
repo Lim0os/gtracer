@@ -1,48 +1,75 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"gtracer/src/ports_adapters/secondary/service/instrumented"
-	"gtracer/src/ports_adapters/secondary/service/parser"
-	"io"
-	"log"
+	"gtracer/src/common/config"
+	"log/slog"
 	"os"
-	"os/exec"
+	"reflect"
 )
 
 func main() {
-
-	inst := instrumented.New("../test_gorutine1", "", nil)
-	inst.Processed()
-	log.Println(fmt.Sprintf("%s/main.go", inst.OutputPath))
-
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("cd %s && go run main.go", inst.OutputPath))
-
-	stdout, err := cmd.StdoutPipe()
+	conf, err := config.Execute()
 	if err != nil {
-		log.Fatal(err)
+		slog.Error(err.Error())
+		os.Exit(1)
 	}
+	switch conf.(type) {
+	case *config.CommandCli:
+		startCli(*conf.(*config.CommandCli))
+	case *config.ServerCli:
+		startServer(*conf.(*config.ServerCli))
 
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		log.Fatal(err)
+	default:
+		slog.Error("Error starting")
 	}
+}
 
-	pr, pw := io.Pipe()
-	multiOut := io.MultiWriter(pw, os.Stdout)
+func startCli(conf config.CommandCli) {
+	logger := config.InitLogger(conf.LogLvl)
+	logger.Info("starting cli")
+	cliRouter(conf, "gotrace", context.Context(context.TODO()), func(ctx context.Context, a any) error {
+		return fmt.Errorf("TestEroor")
+	})
 
-	go func() {
-		if _, err := io.Copy(multiOut, stdout); err != nil {
-			log.Printf("copy error: %v", err)
+}
+
+func startServer(conf config.ServerCli) {
+	logger := config.InitLogger(conf.LogLvl)
+	logger.Info("starting server")
+
+}
+
+func cliRouter(cmd config.CommandCli, tag string, ctx context.Context, fn func(context.Context, any) error) {
+	val := reflect.ValueOf(cmd)
+	typ := val.Type()
+
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		commandTag, hasTag := field.Tag.Lookup("cli_command")
+
+		if hasTag && commandTag == tag {
+			fieldValue := val.Field(i)
+
+			var nestedStruct any
+			if fieldValue.Kind() == reflect.Ptr && !fieldValue.IsNil() {
+				nestedStruct = fieldValue.Elem().Interface()
+			} else if fieldValue.Kind() != reflect.Ptr {
+				nestedStruct = fieldValue.Interface()
+			} else {
+				slog.Warn(fmt.Sprintf("command %s is nil", tag))
+				return
+			}
+
+			err := fn(ctx, nestedStruct)
+			if err != nil {
+				slog.Error(err.Error())
+				return
+			}
+			return
 		}
-		pw.Close()
-	}()
-
-	parse := parser.NewParser(pr)
-	parse.Parse()
-
-	if err := cmd.Wait(); err != nil {
-		log.Fatal(err)
 	}
+	slog.Warn(fmt.Sprintf("command %s not found", tag))
+	return
 }

@@ -1,15 +1,7 @@
 package http_server
 
-import "net/http"
+import "gtracer/src/application"
 
 type Server struct {
-	// TODO: добавьте зависимости сервера
-}
-
-func NewServer() *Server {
-	return &Server{}
-}
-
-func (s *Server) Start(addr string) error {
-	return http.ListenAndServe(addr, nil)
+	App application.App
 }
