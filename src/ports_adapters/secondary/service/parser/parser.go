@@ -3,117 +3,118 @@ package parser
 import (
 	"bufio"
 	"fmt"
-	"gtracer/src/domain/parser"
+	"gtrace/src/domain/parser"
+	"os"
+
 	"io"
+	"log/slog"
 	"strings"
 )
 
 type Parser struct {
-	input io.Reader
+	input  io.Reader
+	logger *slog.Logger
 }
 
-func NewParser(input io.Reader) *Parser {
-	return &Parser{input: input}
+func NewParser(logger *slog.Logger) *Parser {
+	return &Parser{logger: logger}
 }
 
-func (p *Parser) Parse() {
-	scanner := bufio.NewScanner(p.input)
-	p.ParseToDot(scanner)
+func (p *Parser) ParseFromCmd(input io.Reader) (*parser.GorutineGraph, error) {
+	scanner := bufio.NewScanner(input)
+	graph, err := p.ParseGorutineTrace(scanner)
+	if err != nil {
+		p.logger.Error("failed to parse graph", slog.String("error", err.Error()))
+		return nil, err
+	}
+	return graph, nil
 }
 
-//func (p *Parser) File() {
-//	file, err := os.Open(p.filePath)
-//	if err != nil {
-//		panic(err)
-//	}
-//	defer file.Close()
-//
-//	scanner := bufio.NewScanner(file)
-//	p.ParseToDot(scanner)
-//}
+func (p *Parser) ParseFromFile(filePath string) (*parser.GorutineGraph, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		p.logger.Error("failed to open file", slog.String("error", err.Error()))
+	}
+	scanner := bufio.NewScanner(file)
+	defer file.Close()
 
-func (p *Parser) ParseToDot(scanner *bufio.Scanner) {
-	goroutines := make(map[string]parser.Goroutine)
-	channels := make(map[string]parser.Channel)
-	edges := []parser.Edge{}
-	channelClosedBy := make(map[string]string)
+	graph, err := p.ParseGorutineTrace(scanner)
+	if err != nil {
+		p.logger.Error("failed to parse graph", slog.String("error", err.Error()))
+		return nil, err
+	}
+	return graph, nil
+}
+
+func (p *Parser) ParseGorutineTrace(scanner *bufio.Scanner) (*parser.GorutineGraph, error) {
+	graph := &parser.GorutineGraph{
+		Gorutines: make(map[string]parser.Goroutine),
+		Channels:  make(map[string]parser.Channel),
+		Edges:     []parser.Edge{},
+	}
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "[GTRACE]") {
 			continue
 		}
+
 		parts := strings.Fields(line)
 		if len(parts) < 2 {
 			continue
 		}
-		event := parts[1]
 
-		switch event {
+		switch parts[1] {
 		case "channel_create":
-
-			ch := parser.Channel{
-				Name: parts[2],
+			if len(parts) < 5 {
+				return nil, fmt.Errorf("invalid channel_create format: %s", line)
+			}
+			channelName := fmt.Sprintf("chan_%s_%s", parts[2], parts[3])
+			graph.Channels[channelName] = parser.Channel{
+				Name: channelName,
 				File: parts[3],
 				TS:   parts[4],
 			}
-			channels[ch.Name] = ch
 
 		case "func_start":
-			goroutines[parts[2]] = parser.Goroutine{
-				ID:   parts[2],
+			if len(parts) < 6 {
+				return nil, fmt.Errorf("invalid func_start format: %s", line)
+			}
+			goroutineID := parts[2]
+			graph.Gorutines[goroutineID] = parser.Goroutine{
+				ID:   goroutineID,
 				Func: parts[3],
 				File: parts[4],
 				TS:   parts[5],
 			}
 
-		case "func_end":
-			edges = append(edges, parser.Edge{
-				From:  fmt.Sprintf("goroutine %s (ID: %s)\n%s\n%s", goroutines[parts[2]].Func, parts[2], goroutines[parts[2]].File, goroutines[parts[2]].TS),
-				To:    fmt.Sprintf("end %s (ID: %s)\n%s\n%s", goroutines[parts[2]].Func, parts[2], parts[4], parts[5]),
-				Label: "end",
-			})
-
 		case "channel_send":
-			edges = append(edges, parser.Edge{
-				From:  fmt.Sprintf("goroutine %s (ID: %s)\n%s\n%s", goroutines[parts[2]].Func, parts[2], goroutines[parts[2]].File, goroutines[parts[2]].TS),
-				To:    fmt.Sprintf("channel %s", parts[3]),
+			if len(parts) < 5 {
+				return nil, fmt.Errorf("invalid channel_send format: %s", line)
+			}
+			fromGoroutine := parts[2]
+			channelName := fmt.Sprintf("chan_%s_%s", parts[3], parts[4])
+			graph.Edges = append(graph.Edges, parser.Edge{
+				From:  fromGoroutine,
+				To:    channelName,
 				Label: "send",
 			})
 
-		case "channel_receive":
-			edges = append(edges, parser.Edge{
-				From:  fmt.Sprintf("channel %s", parts[3]),
-				To:    fmt.Sprintf("goroutine %s (ID: %s)\n%s\n%s", goroutines["1"].Func, "1", parts[4], parts[5]),
-				Label: "receive",
-			})
-
 		case "channel_close":
-			channelClosedBy[parts[3]] = goroutines[parts[2]].Func
-			edges = append(edges, parser.Edge{
-				From:  fmt.Sprintf("goroutine %s (ID: %s)\n%s\n%s", goroutines[parts[2]].Func, parts[2], goroutines[parts[2]].File, goroutines[parts[2]].TS),
-				To:    fmt.Sprintf("channel %s", parts[3]),
-				Label: "close",
-			})
+			if len(parts) < 5 {
+				return nil, fmt.Errorf("invalid channel_close format: %s", line)
+			}
+			channelName := fmt.Sprintf("chan_%s_%s", parts[3], parts[4])
+			if ch, ok := graph.Channels[channelName]; ok {
+				ch.TS = parts[5]
+				graph.Channels[channelName] = ch
+			}
 		}
 	}
 
-	fmt.Println("strict digraph goroutine_channels {")
-	fmt.Println("  // Nodes")
-	for _, g := range goroutines {
-		fmt.Printf("  \"%s (ID: %s)\\n%s\\n%s\";\n", g.Func, g.ID, g.File, g.TS)
-	}
-	for _, ch := range channels {
-		label := fmt.Sprintf("channel %s", ch.Name)
-		if closer, ok := channelClosedBy[ch.Name]; ok {
-			label += fmt.Sprintf(" (closed by %s)", closer)
-		}
-		label += fmt.Sprintf("\\n%s\\n%s", ch.File, ch.TS)
-		fmt.Printf("  \"%s\";\n", label)
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scanner error: %v", err)
 	}
 
-	fmt.Println("  // Edges")
-	for _, e := range edges {
-		fmt.Printf("  \"%s\" -> \"%s\" [label=\"%s\"];\n", e.From, e.To, e.Label)
-	}
-	fmt.Println("}")
+	return graph, nil
 }

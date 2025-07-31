@@ -30,6 +30,9 @@ func (c *CommandCli) Validate() error {
 	if c.GoTrace.TargetProject == "" {
 		return errors.New("target project is required")
 	}
+	if c.GoTrace.OutputProject == "" {
+		c.GoTrace.OutputProject = c.GoTrace.TargetProject + "_instrumented"
+	}
 	return nil
 }
 
@@ -86,6 +89,7 @@ func Execute() (Config, error) {
 						Name:    "output",
 						Aliases: []string{"o"},
 						Usage:   "Output project",
+						Value:   "",
 					},
 					&cli.UintFlag{
 						Name:    "log",
@@ -102,6 +106,7 @@ func Execute() (Config, error) {
 						},
 						LogLvl: uint8(c.Uint("log")),
 					}
+					result.Validate()
 					return nil
 				},
 			},

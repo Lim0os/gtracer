@@ -1,9 +1,11 @@
 package application
 
+import "gtrace/src/application/commands"
+
 type App struct {
-	// TODO: добавьте зависимости приложения
+	Commands Command
 }
 
-func NewApp() *App {
-	return &App{}
+type Command struct {
+	GoTraceCli commands.GoTraceCommand
 }

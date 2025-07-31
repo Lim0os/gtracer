@@ -3,7 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"gtracer/src/common/config"
+	"gtrace/src/common/config"
+	"gtrace/src/ports_adapters/primary/cli"
+	"gtrace/src/ports_adapters/secondary/service/app"
+
+	clir "gtrace/src/domain/cli"
+
 	"log/slog"
 	"os"
 	"reflect"
@@ -29,9 +34,9 @@ func main() {
 func startCli(conf config.CommandCli) {
 	logger := config.InitLogger(conf.LogLvl)
 	logger.Info("starting cli")
-	cliRouter(conf, "gotrace", context.Context(context.TODO()), func(ctx context.Context, a any) error {
-		return fmt.Errorf("TestEroor")
-	})
+	application := app.InitApp(logger)
+	c := cli.NewCli(*application)
+	cliRouter(conf, "gotrace", context.Context(context.TODO()), c.GoTrace)
 
 }
 
@@ -41,7 +46,7 @@ func startServer(conf config.ServerCli) {
 
 }
 
-func cliRouter(cmd config.CommandCli, tag string, ctx context.Context, fn func(context.Context, any) error) {
+func cliRouter(cmd config.CommandCli, tag string, ctx context.Context, fn func(r *clir.Request) error) {
 	val := reflect.ValueOf(cmd)
 	typ := val.Type()
 
@@ -61,8 +66,12 @@ func cliRouter(cmd config.CommandCli, tag string, ctx context.Context, fn func(c
 				slog.Warn(fmt.Sprintf("command %s is nil", tag))
 				return
 			}
+			r := &clir.Request{
+				Ctx:  ctx,
+				Data: nestedStruct,
+			}
 
-			err := fn(ctx, nestedStruct)
+			err := fn(r)
 			if err != nil {
 				slog.Error(err.Error())
 				return
